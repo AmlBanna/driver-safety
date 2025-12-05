@@ -13,6 +13,10 @@ import zipfile
 import tempfile
 import time
 from collections import Counter
+import warnings
+
+# تجاهل أخطاء rich (مش ضروري)
+warnings.filterwarnings("ignore", category=UserWarning, module="rich")
 
 # ================================
 # 1. المسارات
@@ -21,7 +25,6 @@ BASE_DIR = Path(__file__).parent
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-# Google Drive IDs
 DROWSINESS_ZIP_ID = "1m-6tjfX46a82wxmrMTclBXrVAf_XmJlj"
 DISTRACTION_MODEL_ID = "1QE5Z84JU4b0N0MlZtaLsdFt60nIXzt3Z"
 
@@ -41,7 +44,6 @@ def download_file(url, path):
         urllib.request.urlretrieve(url, path)
 
 def download_models():
-    # النعاس
     zip_path = MODELS_DIR / "eye_model.zip"
     if not DROWSINESS_MODEL_PATH.exists():
         download_file(DROWSINESS_ZIP_URL, zip_path)
@@ -49,13 +51,11 @@ def download_models():
             z.extractall(MODELS_DIR)
         zip_path.unlink()
         st.success("تم تحميل موديل النعاس")
-
-    # التشتت
     download_file(DISTRACTION_URL, DISTRACTION_MODEL_PATH)
     st.success("تم تحميل موديل التشتت")
 
 # ================================
-# 3. تحميل موديل التشتت
+# 3. موديل التشتت
 # ================================
 @st.cache_resource
 def load_distraction():
@@ -89,7 +89,6 @@ def predict_distraction(frame):
     frame_count += 1
     if frame_count % 2 != 0:
         return history[-1] if history else 'safe_driving'
-
     x = tf.convert_to_tensor(np.expand_dims(cv2.resize(frame, (224,224))/255.0, 0).astype(np.float32))
     pred = predict_fn(x)[0].numpy()
     idx = np.argmax(pred)
@@ -99,7 +98,7 @@ def predict_distraction(frame):
     return Counter(history).most_common(1)[0][0] if len(history) >= 3 else label
 
 # ================================
-# 5. تحميل موديل النعاس
+# 5. موديل النعاس
 # ================================
 @st.cache_resource
 def load_drowsiness():
@@ -150,7 +149,6 @@ def detect_drowsiness(frame):
 # ================================
 st.set_page_config(page_title="نظام سلامة السائق", layout="wide")
 st.title("نظام كشف النعاس والتشتت")
-st.markdown("**يعمل فورًا – بدون أخطاء**")
 
 tab1, tab2 = st.tabs(["كاميرا مباشرة", "رفع فيديو"])
 
