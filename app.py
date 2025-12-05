@@ -15,7 +15,7 @@ import time
 from collections import Counter
 import warnings
 
-# تجاهل أخطاء rich
+# تجاهل أخطاء غير مهمة
 warnings.filterwarnings("ignore", category=UserWarning, module="rich")
 
 # ================================
@@ -59,7 +59,7 @@ def download_models():
     st.success("تم تحميل موديل التشتت")
 
 # ================================
-# 3. موديل التشتت
+# 3. موديل التشتت (مثل كودك)
 # ================================
 @st.cache_resource
 def load_distraction():
@@ -74,7 +74,7 @@ def load_distraction():
 model, idx_to_class, predict_fn = load_distraction()
 
 # ================================
-# 4. تصنيف التشتت
+# 4. تصنيف التشتت (مثل كودك)
 # ================================
 def get_final_label(cls, conf):
     if cls == 'c6' and conf > 0.30: return 'drinking'
@@ -88,21 +88,31 @@ def get_final_label(cls, conf):
 history = []
 frame_count = 0
 
-def predict_distraction(frame):
+def predict_smooth_fast(frame):
     global history, frame_count
     frame_count += 1
+
     if frame_count % 2 != 0:
         return history[-1] if history else 'safe_driving'
-    x = tf.convert_to_tensor(np.expand_dims(cv2.resize(frame, (224,224))/255.0, 0).astype(np.float32))
-    pred = predict_fn(x)[0].numpy()
+
+    input_tensor = tf.convert_to_tensor(np.expand_dims(cv2.resize(frame, (224,224)).astype(np.float32)/255.0, 0))
+    pred = predict_fn(input_tensor)[0].numpy()
     idx = np.argmax(pred)
-    label = get_final_label(idx_to_class[idx], pred[idx])
+    cls = idx_to_class[idx]
+    conf = pred[idx]
+
+    label = get_final_label(cls, conf)
+
     history.append(label)
-    if len(history) > 8: history.pop(0)
-    return Counter(history).most_common(1)[0][0] if len(history) >= 3 else label
+    if len(history) > 8:
+        history.pop(0)
+
+    if len(history) >= 3:
+        return Counter(history).most_common(1)[0][0]
+    return label
 
 # ================================
-# 5. موديل النعاس
+# 5. موديل النعاس (مثل كودك)
 # ================================
 @st.cache_resource
 def load_drowsiness():
@@ -116,36 +126,80 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_fronta
 eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
 closed_counter = 0
 THRESH = 5
+BASE_SCALE = 0.7
+MIN_FACE_SIZE = 80
 
 def detect_drowsiness(frame):
     global closed_counter
-    gray = cv2.cvtColor(cv2.resize(frame, (0,0), fx=0.7, fy=0.7), cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(80,80))
-    eyes, boxes = [], []
-    h, w = frame.shape[:2]
-    for (x,y,fw,fh) in faces:
-        roi = gray[y:y+int(fh*0.65), x:x+fw]
-        es = eye_cascade.detectMultiScale(roi, 1.05, 4, minSize=(20,20))
-        for (ex,ey,ew,eh) in es:
-            if ey > roi.shape[0]*0.55: continue
-            eye_img = cv2.resize(roi[ey:ey+eh, ex:ex+ew], (48,48)) / 255.0
-            eyes.append(np.expand_dims(eye_img, -1).astype(np.float32))
-            sx = w / gray.shape[1]; sy = h / gray.shape[0]
-            boxes.append((int((x+ex)*sx), int((y+ey)*sy), int(ew*sx), int(eh*sy)))
-    drowsy = False
-    if eyes:
-        batch = np.stack(eyes)
+    h_orig, w_orig = frame.shape[:2]
+    scale = BASE_SCALE
+    if min(w_orig, h_orig) < 400: scale = 1.0
+    small_frame = cv2.resize(frame, (0,0), fx=scale, fy=scale)
+    gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(MIN_FACE_SIZE, MIN_FACE_SIZE))
+    eyes_batch = []
+    eye_boxes = []
+    eyes_closed = False
+    eyes_detected = False
+
+    for (x, y, w, h) in faces:
+        roi_gray = gray[y:y+int(h*0.65), x:x+w]
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.05, minNeighbors=4, minSize=(20, 20), maxSize=(80, 80))
+        for (ex, ey, ew, eh) in eyes:
+            if ey > roi_gray.shape[0] * 0.55: continue
+            eye_img = roi_gray[ey:ey+eh, ex:ex+ew]
+            if eye_img.size == 0 or min(ew, eh) < 18: continue
+            eyes_detected = True
+            eyes_batch.append(cv2.resize(eye_img, (48,48)).astype(np.float32) / 255.0)
+            sx, sy = w_orig / small_frame.shape[1], h_orig / small_frame.shape[0]
+            ex_full = int((x + ex) * sx)
+            ey_full = int((y + ey) * sy)
+            ew_full = int(ew * sx)
+            eh_full = int(eh * sy)
+            eye_boxes.append((ex_full, ey_full, ew_full, eh_full))
+
+    preds = np.array([])
+    if eyes_batch:
+        batch = np.stack([np.expand_dims(e, -1) for e in eyes_batch])
         out = drowsiness_fn(tf.constant(batch))
-        scores = out[list(out.keys())[0]].numpy().flatten()
-        for i, (x,y,w,h) in enumerate(boxes):
-            open_eye = scores[i] > 0.5
-            col = (0,255,0) if open_eye else (0,0,255)
-            cv2.rectangle(frame, (x,y), (x+w,y+h), col, 2)
-            if not open_eye:
-                closed_counter += 1
-                drowsy = True
-            else:
-                closed_counter = max(0, closed_counter - 1)
+        pred_key = list(out.keys())[0]
+        preds = out[pred_key].numpy().flatten()
+
+    current_state = 'unknown'
+    for i, (pred, (ex, ey, ew, eh)) in enumerate(zip(preds, eye_boxes)):
+        is_open = pred > 0.5
+        conf = pred if is_open else 1 - pred
+        color = (0, 255, 0) if is_open else (0, 0, 255)
+        label = f"{'OPEN' if is_open else 'CLOSED'} {conf:.2f}"
+        cv2.rectangle(frame, (ex, ey), (ex+ew, ey+eh), color, 2)
+        cv2.putText(frame, label, (ex, ey-8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        if not is_open:
+            eyes_closed = True
+            current_state = 'closed'
+        else:
+            current_state = 'open'
+
+    if not eyes_detected and faces:
+        cv2.putText(frame, "Eyes not visible", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
+
+    # Drowsiness Logic
+    if eyes_closed:
+        closed_counter += 1
+    elif eyes_detected:
+        closed_counter = max(0, closed_counter - 1)
+
+    if closed_counter >= THRESH:
+        cv2.rectangle(frame, (0, 0), (frame.shape[1], 100), (0, 0, 255), -1)
+        cv2.putText(frame, "DROWSINESS ALERT!", (60, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3)
+        cv2.putText(frame, "WAKE UP!", (60, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+    status = "CLOSED" if eyes_closed else "OPEN"
+    color = (0, 0, 255) if eyes_closed else (0, 255, 0)
+    cv2.putText(frame, f"Status: {status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+    if closed_counter > 0:
+        cv2.putText(frame, f"Closed: {closed_counter}", (10, frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
     return frame, closed_counter >= THRESH
 
 # ================================
