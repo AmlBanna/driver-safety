@@ -39,11 +39,13 @@ CLASS_JSON_PATH = BASE_DIR / "class_indices.json"
 # 2. تحميل الموديلات
 # ================================
 def download_file(url, path):
-    if path.exists(): return
+    if path.exists():
+        return
     with st.spinner(f"تحميل {path.name}..."):
         urllib.request.urlretrieve(url, path)
 
 def download_models():
+    # موديل النعاس
     zip_path = MODELS_DIR / "eye_model.zip"
     if not DROWSINESS_MODEL_PATH.exists():
         download_file(DROWSINESS_ZIP_URL, zip_path)
@@ -51,6 +53,7 @@ def download_models():
             z.extractall(MODELS_DIR)
         zip_path.unlink()
         st.success("تم تحميل موديل النعاس")
+    # موديل التشتت
     download_file(DISTRACTION_URL, DISTRACTION_MODEL_PATH)
     st.success("تم تحميل موديل التشتت")
 
@@ -152,6 +155,7 @@ st.title("نظام كشف النعاس والتشتت")
 
 tab1, tab2 = st.tabs(["كاميرا مباشرة", "رفع فيديو"])
 
+# ---------- Live ----------
 with tab1:
     col1, col2 = st.columns(2)
     with col1: cam1 = st.checkbox("أمامي (نعاس)", True)
@@ -165,28 +169,43 @@ with tab1:
         cap2 = cv2.VideoCapture(1) if cam2 else None
         st.session_state.run = True
 
-    if stop: st.session_state.run = False; st.rerun()
+    if stop:
+        st.session_state.run = False
+        st.rerun()
 
     if st.session_state.get("run"):
         while True:
             f1 = f2 = None
             if cap1 and cap1.isOpened():
                 r, f = cap1.read()
-                if r: f1, a = detect_drowsiness(f.copy()); alert.markdown("<h2 style='color:red'>نعسان!</h2>" if a else "")
+                if r:
+                    f1, a = detect_drowsiness(f.copy())
+                    if a:
+                        alert.markdown("<h2 style='color:red;text-align:center;'>نعسان!</h2>", unsafe_allow_html=True)
             if cap2 and cap2.isOpened():
                 r, f = cap2.read()
-                if r: l = predict_distraction(f.copy()); cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 4); f2 = f
+                if r:
+                    l = predict_distraction(f.copy())
+                    cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 4)
+                    f2 = f
             if cam1 and f1 is not None: ph1.image(f1, channels="BGR")
             if cam2 and f2 is not None: ph2.image(f2, channels="BGR")
             time.sleep(0.03)
 
+# ---------- Upload ----------
 with tab2:
-    f1 = st.file_uploader("فيديو أمامي", ["mp4"])
-    f2 = st.file_uploader("فيديو جانبي", ["mp4"])
+    f1 = st.file_uploader("فيديو أمامي (نعاس)", ["mp4"])
+    f2 = st.file_uploader("فيديو جانبي (تشتت)", ["mp4"])
     if st.button("تحليل") and (f1 or f2):
         t1 = t2 = None
-        if f1: t1 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4"); t1.write(f1.read()); t1.close()
-        if f2: t2 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4"); t2.write(f2.read()); t2.close()
+        if f1:
+            t1 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            t1.write(f1.read())
+            t1.close()
+        if f2:
+            t2 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            t2.write(f2.read())
+            t2.close()
         cap1 = cv2.VideoCapture(t1.name) if t1 else None
         cap2 = cv2.VideoCapture(t2.name) if t2 else None
         ph1 = st.empty(); ph2 = st.empty()
@@ -194,11 +213,23 @@ with tab2:
         while (cap1 and cap1.isOpened()) or (cap2 and cap2.isOpened()):
             if cap1:
                 r, f = cap1.read()
-                if r: f, a = detect_drowsiness(f.copy()); dc += a; ph1.image(f, channels="BGR")
+                if r:
+                    f, a = detect_drowsiness(f.copy())
+                    if a: dc += 1
+                    ph1.image(f, channels="BGR")
             if cap2:
                 r, f = cap2.read()
-                if r: l = predict_distraction(f.copy()); ev[l] += 1; cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 4); ph2.image(f, channels="BGR")
+                if r:
+                    l = predict_distraction(f.copy())
+                    ev[l] += 1
+                    cv2.putText(f, l, (10,70), 0, 2, (0,0,255), 4)
+                    ph2.image(f, channels="BGR")
             time.sleep(0.03)
         st.success(f"النعاس: {dc} | الأحداث: {dict(ev)}")
-        for t in (t1,t2): if t: os.unlink(t.name)
-        for c in (cap1,cap2): if c: c.release()
+        # تنظيف الملفات
+        for t in (t1, t2):
+            if t:
+                os.unlink(t.name)
+        for c in (cap1, cap2):
+            if c:
+                c.release()
