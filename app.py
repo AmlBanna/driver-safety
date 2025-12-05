@@ -15,7 +15,7 @@ import time
 from collections import Counter
 import warnings
 
-# تجاهل أخطاء rich (مش ضروري)
+# تجاهل أخطاء rich
 warnings.filterwarnings("ignore", category=UserWarning, module="rich")
 
 # ================================
@@ -45,7 +45,7 @@ def download_file(url, path):
         urllib.request.urlretrieve(url, path)
 
 def download_models():
-    # موديل النعاس
+    # موديل النعاس (SavedModel)
     zip_path = MODELS_DIR / "eye_model.zip"
     if not DROWSINESS_MODEL_PATH.exists():
         download_file(DROWSINESS_ZIP_URL, zip_path)
@@ -53,7 +53,8 @@ def download_models():
             z.extractall(MODELS_DIR)
         zip_path.unlink()
         st.success("تم تحميل موديل النعاس")
-    # موديل التشتت
+
+    # موديل التشتت (.keras)
     download_file(DISTRACTION_URL, DISTRACTION_MODEL_PATH)
     st.success("تم تحميل موديل التشتت")
 
